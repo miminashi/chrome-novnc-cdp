@@ -11,4 +11,5 @@ services:
     image: vital987/chrome-novnc:latest
     ports:
       - "${HOST_PORT-8080}:8080/tcp"
+      - "9222:9222"
     restart: always
