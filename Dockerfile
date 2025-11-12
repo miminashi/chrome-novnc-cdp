@@ -1,7 +1,5 @@
 FROM debian:13-slim
 
-LABEL Maintainer="Apurv Vyavahare <apurvvyavahare@gmail.com>"
-
 # Locale
 ENV LANG=ja_JP.UTF-8
 ENV LANGUAGE=ja_JP.UTF-8
