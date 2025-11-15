@@ -13,7 +13,7 @@
 docker compose up
 ```
 
-Access http://localhost:8080.
+Access http://localhost:9220
 
 
 ## Usage Example: Using with browser-use

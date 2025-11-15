@@ -2,12 +2,15 @@ services:
   chrome-novnc:
     build: .
     environment:
-      - VNC_TITLE=${VNC_TITLE-Chromium}
-      - VNC_SHARED=${VNC_SHARED-false}
+      - VNC_TITLE=chrome-novnc-cdp
+      - VNC_SHARED="true"
       - VNC_RESOLUTION=${VNC_RESOLUTION-1280x720}
-      - PORT=8080
+      - PORT=9220
     ports:
-      - "8080:8080"
+      # novnc web client
+      - "9220:9220"
+      # browser control api
+      - "9221:9221"
+      # CDP port
       - "9222:9222"
-      - "9224:9224"
     restart: always

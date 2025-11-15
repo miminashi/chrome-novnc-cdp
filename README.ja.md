@@ -14,7 +14,7 @@
 docker compose up
 ```
 
-http://localhost:8080 にアクセスしてください。
+http://localhost:9220 にアクセスしてください。
 
 
 ## 使用例: borwser-use から使用する

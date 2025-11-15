@@ -40,7 +40,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         response = {"message": "Method Not Allowed. Use POST."}
         self.wfile.write(json.dumps(response).encode())
 
-def run(server_class=HTTPServer, handler_class=RequestHandler, port=9224):
+def run(server_class=HTTPServer, handler_class=RequestHandler, port=9221):
     server_address = ('', port)
     httpd = server_class(server_address, handler_class)
     print(f'Starting httpd on port {port}...')
