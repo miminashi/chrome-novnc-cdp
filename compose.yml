@@ -13,4 +13,3 @@ services:
       - "9221:9221"
       # CDP port
       - "9222:9222"
-    restart: always
