@@ -35,8 +35,8 @@ async def proxy_http(request):
                 # ヘッダーはミュータブルなdictにコピーする
                 response_headers = dict(resp.headers)
 
-                # /json/version または /json の場合、レスポンスを書き換える
-                if (request.path == '/json/version' or request.path == '/json') and resp.status == 200 and original_host:
+                # /json/version, /json, /json/list の場合、レスポンスを書き換える
+                if request.path in ('/json/version', '/json', '/json/list') and resp.status == 200 and original_host:
                     try:
                         data = json.loads(content)
 
@@ -91,35 +91,65 @@ async def proxy_websocket(request):
             async with session.ws_connect(target_url, headers=headers) as ws_client:
                 logging.info("WebSocket connection established.")
 
+                # 接続状態を追跡するためのイベント
+                shutdown_event = asyncio.Event()
+
                 async def forward_to_client():
                     """ターゲット -> プロキシ -> クライアント"""
-                    async for msg in ws_client:
-                        if msg.type == WSMsgType.TEXT:
-                            await ws_server.send_str(msg.data)
-                        elif msg.type == WSMsgType.BINARY:
-                            await ws_server.send_bytes(msg.data)
-                        elif msg.type == WSMsgType.CLOSED:
-                            await ws_server.close(code=ws_client.close_code or 999, message=msg.data)
-                        elif msg.type == WSMsgType.ERROR:
-                            await ws_server.close(code=ws_client.close_code or 999, message=msg.data)
-                    logging.info("Forward to client finished.")
+                    try:
+                        async for msg in ws_client:
+                            if shutdown_event.is_set():
+                                break
+                            if msg.type == WSMsgType.TEXT:
+                                if not ws_server.closed:
+                                    await ws_server.send_str(msg.data)
+                            elif msg.type == WSMsgType.BINARY:
+                                if not ws_server.closed:
+                                    await ws_server.send_bytes(msg.data)
+                            elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                                break
+                    except Exception as e:
+                        logging.debug(f"Forward to client error: {e}")
+                    finally:
+                        shutdown_event.set()
+                        logging.info("Forward to client finished.")
 
 
                 async def forward_to_target():
                     """クライアント -> プロキシ -> ターゲット"""
-                    async for msg in ws_server:
-                        if msg.type == WSMsgType.TEXT:
-                            await ws_client.send_str(msg.data)
-                        elif msg.type == WSMsgType.BINARY:
-                            await ws_client.send_bytes(msg.data)
-                        elif msg.type == WSMsgType.CLOSED:
-                            await ws_client.close(code=ws_server.close_code or 999, message=msg.data)
-                        elif msg.type == WSMsgType.ERROR:
-                            await ws_client.close(code=ws_server.close_code or 999, message=msg.data)
-                    logging.info("Forward to target finished.")
+                    try:
+                        async for msg in ws_server:
+                            if shutdown_event.is_set():
+                                break
+                            if msg.type == WSMsgType.TEXT:
+                                if not ws_client.closed:
+                                    await ws_client.send_str(msg.data)
+                            elif msg.type == WSMsgType.BINARY:
+                                if not ws_client.closed:
+                                    await ws_client.send_bytes(msg.data)
+                            elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                                break
+                    except Exception as e:
+                        logging.debug(f"Forward to target error: {e}")
+                    finally:
+                        shutdown_event.set()
+                        logging.info("Forward to target finished.")
 
                 # 双方向のメッセージ転送を並行して実行
-                await asyncio.gather(forward_to_client(), forward_to_target())
+                # どちらかが終了したら両方を終了させる
+                tasks = [
+                    asyncio.create_task(forward_to_client()),
+                    asyncio.create_task(forward_to_target())
+                ]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+                # 残りのタスクをキャンセル
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         except Exception as e:
             logging.error(f"Error proxying WebSocket: {e}")
