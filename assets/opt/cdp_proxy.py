@@ -78,7 +78,9 @@ async def proxy_http(request):
 async def proxy_websocket(request):
     """WebSocket接続をプロキシする"""
     # クライアントからのWebSocket接続を準備
-    ws_server = web.WebSocketResponse()
+    # heartbeat=30でkeep-aliveを設定
+    # max_msg_size=200MBでbrowser-useの大きなDOMスナップショットに対応
+    ws_server = web.WebSocketResponse(heartbeat=30, max_msg_size=200*1024*1024)
     await ws_server.prepare(request)
 
     # ターゲットへのWebSocket接続を準備
@@ -88,7 +90,9 @@ async def proxy_websocket(request):
 
     async with ClientSession() as session:
         try:
-            async with session.ws_connect(target_url, headers=headers) as ws_client:
+            # heartbeat=30でkeep-aliveを設定
+            # max_msg_size=200MBでbrowser-useの大きなDOMスナップショットに対応
+            async with session.ws_connect(target_url, headers=headers, heartbeat=30, max_msg_size=200*1024*1024) as ws_client:
                 logging.info("WebSocket connection established.")
 
                 # 接続状態を追跡するためのイベント
@@ -96,44 +100,65 @@ async def proxy_websocket(request):
 
                 async def forward_to_client():
                     """ターゲット -> プロキシ -> クライアント"""
+                    msg_from_target = 0
                     try:
                         async for msg in ws_client:
                             if shutdown_event.is_set():
+                                logging.debug("Forward to client: shutdown_event is set, breaking")
                                 break
                             if msg.type == WSMsgType.TEXT:
+                                msg_from_target += 1
+                                # Log errors from Chrome
+                                if '"error"' in msg.data:
+                                    logging.warning(f"Forward to client [{msg_from_target}] ERROR: {msg.data[:500]}")
                                 if not ws_server.closed:
                                     await ws_server.send_str(msg.data)
                             elif msg.type == WSMsgType.BINARY:
                                 if not ws_server.closed:
                                     await ws_server.send_bytes(msg.data)
                             elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                                logging.info(f"Forward to client: received CLOSED/ERROR message type={msg.type}")
                                 break
+                            elif msg.type == WSMsgType.PING:
+                                logging.debug("Forward to client: received PING")
+                            elif msg.type == WSMsgType.PONG:
+                                logging.debug("Forward to client: received PONG")
                     except Exception as e:
-                        logging.debug(f"Forward to client error: {e}")
+                        logging.warning(f"Forward to client exception: {type(e).__name__}: {e}")
                     finally:
                         shutdown_event.set()
-                        logging.info("Forward to client finished.")
+                        logging.info(f"Forward to client finished. ws_client.closed={ws_client.closed}, ws_server.closed={ws_server.closed}")
 
+
+                msg_count = [0, 0]  # [to_target, from_target]
 
                 async def forward_to_target():
                     """クライアント -> プロキシ -> ターゲット"""
                     try:
                         async for msg in ws_server:
                             if shutdown_event.is_set():
+                                logging.debug("Forward to target: shutdown_event is set, breaking")
                                 break
                             if msg.type == WSMsgType.TEXT:
+                                msg_count[0] += 1
+                                if msg_count[0] <= 10:  # First 10 messages
+                                    logging.debug(f"Forward to target [{msg_count[0]}]: {msg.data[:200]}...")
                                 if not ws_client.closed:
                                     await ws_client.send_str(msg.data)
                             elif msg.type == WSMsgType.BINARY:
                                 if not ws_client.closed:
                                     await ws_client.send_bytes(msg.data)
                             elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                                logging.info(f"Forward to target: received CLOSED/ERROR message type={msg.type}")
+                                break
+                            elif msg.type == WSMsgType.CLOSE:
+                                logging.info(f"Forward to target: received CLOSE message, close_code={getattr(msg, 'extra', None)}")
                                 break
                     except Exception as e:
-                        logging.debug(f"Forward to target error: {e}")
+                        logging.warning(f"Forward to target exception: {type(e).__name__}: {e}")
                     finally:
                         shutdown_event.set()
-                        logging.info("Forward to target finished.")
+                        logging.info(f"Forward to target finished. ws_client.closed={ws_client.closed}, ws_server.closed={ws_server.closed}")
 
                 # 双方向のメッセージ転送を並行して実行
                 # どちらかが終了したら両方を終了させる
